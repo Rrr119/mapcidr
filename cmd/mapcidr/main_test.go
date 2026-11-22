@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectdiscovery/goflags"
 	"github.com/projectdiscovery/ipranger"
 
 	"github.com/stretchr/testify/require"
@@ -170,6 +171,43 @@ func TestProcess(t *testing.T) {
 				HostCount: 128,
 			},
 			expectedOutput: []string{"10.40.0.0/25", "10.40.0.128/25"},
+		},
+		{
+			name:       "CIDRSplitByPrefixIPv4",
+			chancidr:   make(chan string),
+			outputchan: make(chan string),
+			options: Options{
+
+				FileCidr:    []string{"10.40.0.0/24"},
+				SplitPrefix: 26,
+			},
+			expectedOutput: []string{
+				"10.40.0.0/26", "10.40.0.64/26", "10.40.0.128/26", "10.40.0.192/26",
+			},
+		},
+		{
+			name:       "CIDRDedupIPv4",
+			chancidr:   make(chan string),
+			outputchan: make(chan string),
+			options: Options{
+
+				FileCidr: []string{
+					"10.40.0.0/24", "10.40.0.5/24", "10.41.0.0/24", "10.40.0.0/24",
+				},
+				Dedup: true,
+			},
+			expectedOutput: []string{"10.40.0.0/24", "10.41.0.0/24"},
+		},
+		{
+			name:       "CIDRDedupKeepsDistinctPrefixes",
+			chancidr:   make(chan string),
+			outputchan: make(chan string),
+			options: Options{
+
+				FileCidr: []string{"10.40.0.0/24", "10.40.0.0/25", "10.40.0.0/24"},
+				Dedup:    true,
+			},
+			expectedOutput: []string{"10.40.0.0/25", "10.40.0.0/24"},
 		},
 		{
 			name:       "IPRangeExpansionIPv4",
@@ -494,4 +532,35 @@ func globTempDirs(t *testing.T) map[string]struct{} {
 		out[m] = struct{}{}
 	}
 	return out
+}
+
+func TestValidateOptionsNewModes(t *testing.T) {
+	tests := []struct {
+		name    string
+		options Options
+		wantErr bool
+	}{
+		{name: "dedup alone", options: Options{Dedup: true}, wantErr: false},
+		{name: "split prefix alone", options: Options{SplitPrefix: 25}, wantErr: false},
+		{name: "dedup and aggregate conflict", options: Options{Dedup: true, Aggregate: true}, wantErr: true},
+		{name: "split prefix and sbc conflict", options: Options{SplitPrefix: 25, Slices: 2}, wantErr: true},
+		{name: "split prefix and sbh conflict", options: Options{SplitPrefix: 25, HostCount: 10}, wantErr: true},
+		{name: "split prefix and dedup conflict", options: Options{SplitPrefix: 25, Dedup: true}, wantErr: true},
+		{name: "split prefix and aggregate conflict", options: Options{SplitPrefix: 25, Aggregate: true}, wantErr: true},
+		{name: "dedup with sort conflict", options: Options{Dedup: true, SortAscending: true}, wantErr: true},
+		{name: "split prefix too large", options: Options{SplitPrefix: 129}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.wantErr && tt.options.FileCidr == nil {
+				tt.options.FileCidr = goflags.StringSlice{"10.0.0.0/24"}
+			}
+			err := tt.options.validateOptions()
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

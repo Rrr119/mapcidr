@@ -48,6 +48,8 @@ type Options struct {
 	Version               bool
 	Output                string
 	Aggregate             bool
+	Dedup                 bool
+	SplitPrefix           int
 	Shuffle               bool
 	ShufflePorts          string
 	SkipBaseIP            bool
@@ -118,7 +120,9 @@ func ParseOptions() *Options {
 	flagSet.CreateGroup("process", "Process",
 		flagSet.IntVar(&options.Slices, "sbc", 0, "Slice CIDRs by given CIDR count"),
 		flagSet.IntVar(&options.HostCount, "sbh", 0, "Slice CIDRs by given HOST count"),
+		flagSet.IntVar(&options.SplitPrefix, "split-prefix", 0, "Split each input CIDR into subnets of the given prefix length (e.g. 25)"),
 		flagSet.BoolVarP(&options.Aggregate, "aggregate", "a", false, "Aggregate IPs/CIDRs into minimum subnet"),
+		flagSet.BoolVarP(&options.Dedup, "dedup", "d", false, "Deduplicate overlapping/identical input CIDRs without merging them"),
 		flagSet.BoolVarP(&options.AggregateApprox, "aggregate-approx", "aa", false, "Aggregate sparse IPs/CIDRs into minimum approximated subnet"),
 		flagSet.BoolVarP(&options.Count, "count", "c", false, "Count number of IPs in given CIDR"),
 		flagSet.BoolVarP(&options.Range, "range", "r", false, "Convert CIDR to IP range (e.g. 192.168.0.0-192.168.255.255)"),
@@ -220,6 +224,28 @@ func (options *Options) validateOptions() error {
 
 	if options.Slices > 0 && options.HostCount > 0 {
 		return errors.New("sbc and sbh can't be used together")
+	}
+
+	splitModes := 0
+	for _, enabled := range []bool{options.Slices > 0, options.HostCount > 0, options.SplitPrefix > 0} {
+		if enabled {
+			splitModes++
+		}
+	}
+	if splitModes > 1 {
+		return errors.New("sbc, sbh and split-prefix can't be used together")
+	}
+	if options.SplitPrefix < 0 || options.SplitPrefix > 128 {
+		return errors.New("split-prefix must be between 1 and 128")
+	}
+	if options.Dedup && options.Aggregate {
+		return errors.New("dedup and aggregate can't be used together")
+	}
+	if options.Dedup && (options.SortAscending || options.SortDescending) {
+		return errors.New("dedup can't be used with sorting")
+	}
+	if options.SplitPrefix > 0 && (options.Dedup || options.Aggregate) {
+		return errors.New("split-prefix can't be used with aggregate or dedup")
 	}
 
 	if options.SortAscending && options.SortDescending {
@@ -465,7 +491,7 @@ func process(wg *sync.WaitGroup, chancidr, outputchan chan string) {
 
 					for _, ip := range ips {
 						ipCidr := ip.String() + "/32"
-						if options.Aggregate || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
+						if options.Aggregate || options.Dedup || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
 							_, ipnet, _ := net.ParseCIDR(ipCidr)
 							allCidrs = append(allCidrs, ipnet)
 						} else {
@@ -508,7 +534,7 @@ func process(wg *sync.WaitGroup, chancidr, outputchan chan string) {
 			}
 
 			// In case of coalesce/shuffle we need to know all the cidrs and aggregate them by calling the proper function
-			if options.Aggregate || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
+			if options.Aggregate || options.Dedup || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
 				_ = ranger.Add(cidr)
 				allCidrs = append(allCidrs, pCidr)
 			} else {
@@ -522,7 +548,7 @@ func process(wg *sync.WaitGroup, chancidr, outputchan chan string) {
 		if err != nil {
 			fatalf("%s\n", err)
 		}
-		if options.Aggregate || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
+		if options.Aggregate || options.Dedup || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
 			allCidrs = append(allCidrs, cidrs...)
 		} else {
 			for _, cidr := range cidrs {
@@ -536,7 +562,7 @@ func process(wg *sync.WaitGroup, chancidr, outputchan chan string) {
 		if err != nil {
 			fatalf("%s\n", err)
 		}
-		if options.Aggregate || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
+		if options.Aggregate || options.Dedup || options.Shuffle || hasSort || options.AggregateApprox || options.Count {
 			allCidrs = append(allCidrs, cidrs...)
 		} else {
 			for _, cidr := range cidrs {
@@ -577,6 +603,13 @@ func process(wg *sync.WaitGroup, chancidr, outputchan chan string) {
 		}
 		for _, cidrIPV6 := range cCidrsIPV6 {
 			outputchan <- cidrIPV6.String()
+		}
+	}
+
+	// Remove duplicate CIDRs while keeping distinct networks untouched
+	if options.Dedup {
+		for _, cidr := range mapcidr.DedupCIDRs(allCidrs) {
+			outputchan <- cidr.String()
 		}
 	}
 
@@ -642,6 +675,18 @@ func commonFunc(cidr string, outputchan chan string) {
 		}
 	} else if options.HostCount > 0 {
 		subnets, err := mapcidr.SplitByNumber(cidr, options.HostCount)
+		if err != nil {
+			closeAndFatal("%s\n", err)
+		}
+		for _, subnet := range subnets {
+			outputchan <- subnet.String()
+		}
+	} else if options.SplitPrefix > 0 {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			closeAndFatal("%s\n", err)
+		}
+		subnets, err := mapcidr.SplitCIDRByPrefix(network, options.SplitPrefix)
 		if err != nil {
 			closeAndFatal("%s\n", err)
 		}

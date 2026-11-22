@@ -1,0 +1,18 @@
+{
+  "uid": "32234",
+  "harness": "Codex CLI",
+  "snapshotUrl": "https://github.com/Rrr119/mapcidr/commit/040c980f4090f89f9e6d15037a946882a4599262",
+  "harnessVersion": "codex-cli 0.167.2",
+  "operatingSystem": "Ubuntu 26.04.1 LTS",
+  "operatingSystemCell": [
+    "MacOS/Linux"
+  ],
+  "outputDirectory": "/home/dev/feedback/uid32234",
+  "wslDistro": "Ubuntu-26.04",
+  "B": {
+    "success": false,
+    "canceled": true,
+    "error": "任务已取消",
+    "side": "B"
+  }
+}

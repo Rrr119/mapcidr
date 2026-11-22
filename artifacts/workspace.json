@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid32234",
+  "B": "/home/dev/feedback/uid32234",
+  "sha": "040c980f4090f89f9e6d15037a946882a4599262",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "projectdiscovery",
+    "repo": "mapcidr",
+    "sha": "040c980f4090f89f9e6d15037a946882a4599262"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "mapcidr",
+    "cloneUrl": "https://github.com/Rrr119/mapcidr.git"
+  },
+  "at": "2026-11-22T01:33:54.711Z"
+}

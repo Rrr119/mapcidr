@@ -35,7 +35,9 @@ mapCIDR is developed to ease load distribution for mass scanning operations; it 
 
  - **CIDR expansion** support (**default**)
  - **CIDR slicing** support (`sbh`, `sbc`)
+ - **CIDR splitting by prefix length** support (`split-prefix`)
  - **CIDR/IP aggregation** support (`a`, `aa`)
+ - **CIDR/IP deduplication** support (`dedup`, `d`)
  - **CIDR/IP matcher** support (`match-ip`)
  - **CIDR/IP filter** support (`filter-ip`)
  - **CIDR/IP sorting** support (`s`, `sr`)
@@ -66,7 +68,9 @@ INPUT:
 PROCESS:
    -sbc int                  Slice CIDRs by given CIDR count
    -sbh int                  Slice CIDRs by given HOST count
+   -split-prefix int         Split each input CIDR into subnets of the given prefix length (e.g. 25)
    -a, -aggregate            Aggregate IPs/CIDRs into minimum subnet
+   -d, -dedup                Deduplicate overlapping/identical input CIDRs without merging them
    -aa, -aggregate-approx    Aggregate sparse IPs/CIDRs into minimum approximated subnet
    -c, -count                Count number of IPs in given CIDR
    -t4, -to-ipv4             Convert IPs to IPv4 format
@@ -186,6 +190,23 @@ mapcidr -cidr 173.0.84.0/16 -sbh 20000 -silent
 
 Note: It's possible to obtain a perfect split only when the desired number of slices or hosts per subnet is a power of two. Otherwise, the tool will attempt to automatically find the best split strategy to obtain the desired outcome. 
 
+### CIDR Splitting by Prefix Length
+
+To split every input CIDR into subnets of an explicit, longer prefix length, use `-split-prefix`. Unlike `-sbc`/`-sbh`, the resulting prefix length is fixed regardless of the input CIDR size, and it works with both IPv4 and IPv6:
+
+```console
+mapcidr -cidr 173.0.84.0/24 -split-prefix 26 -silent
+```
+
+```console
+173.0.84.0/26
+173.0.84.64/26
+173.0.84.128/26
+173.0.84.192/26
+```
+
+The requested prefix must be greater than or equal to the input CIDR prefix. `-split-prefix` cannot be combined with `-sbc`, `-sbh`, `-aggregate` or `-dedup`.
+
 ### CIDR/IP Aggregation
 
 To merge multiple CIDR ranges into a smaller subnet block, use the following command:
@@ -233,6 +254,25 @@ To list CIDR blocks for a given IP Range (**IPv4 | IPv6**), use the following co
 192.168.0.128/25
 
 ```
+
+### CIDR/IP Deduplication
+
+To remove duplicate or overlapping CIDR entries **without** merging adjacent
+ones, use `-dedup` (short `-d`). Inputs are canonicalized first, so host bits
+and textual representation differences are ignored, e.g. `10.0.0.5/24` and
+`10.0.0.0/24` collapse into a single entry. Distinct prefixes, such as
+`10.0.0.0/24` and `10.0.0.0/25`, are both kept. Use `-aggregate` instead when
+adjacent ranges should also be merged into the smallest supernet.
+
+```console
+$ printf '10.0.0.0/24\n10.0.0.5/24\n10.0.1.0/24\n10.0.0.0/24\n' | mapcidr -dedup -silent
+```
+
+```console
+10.0.0.0/24
+10.0.1.0/24
+```
+
 ### Match / Filter IPs from CIDR
 
 To match IPs from the given list of CIDR ranges, use the following command:
@@ -332,11 +372,13 @@ package main
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/projectdiscovery/mapcidr"
 )
 
 func main() {
+	networks := []*net.IPNet{}
 	// Divide the CIDR into two subnets
 	subnets1 := mapcidr.SplitN("192.168.1.0/24", 2)
 	for _, subnet := range subnets1 {
@@ -346,6 +388,24 @@ func main() {
 	subnets2 := mapcidr.SplitByNumber("192.168.1.0/24", 128)
 	for _, subnet := range subnets2 {
 		fmt.Println(subnet)
+	}
+
+	// Split a network into all subnets of a fixed prefix length
+	_, network, _ := net.ParseCIDR("192.168.1.0/24")
+	subnets3, _ := mapcidr.SplitCIDRByPrefix(network, 26)
+	for _, subnet := range subnets3 {
+		fmt.Println(subnet)
+	}
+
+	// Remove duplicate networks without merging adjacent ones
+	unique := mapcidr.DedupCIDRs(networks)
+	for _, network := range unique {
+		fmt.Println(network)
+	}
+
+	// Aggregate into the smallest equivalent set of CIDRs
+	for _, network := range mapcidr.AggregateCIDRs(networks) {
+		fmt.Println(network)
 	}
 
 	// List all IPs in the CIDR
